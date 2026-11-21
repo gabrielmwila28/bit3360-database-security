@@ -1,20 +1,14 @@
 -- =====================================================================
 -- 04_roles_and_grants.sql
 -- BIT3360 Advanced Databases: Secure Student Records Management System
--- Block 4: standalone demo schema (RLS disabled), classic GRANT/REVOKE
---          SQL roles (TC-11 to TC-13), and SQL injection demo (TC-14).
---
--- Run in the Supabase SQL Editor (runs as the postgres role).
--- The demo schema is NOT exposed through the Data API.
+-- Block 4: Standalone SQL roles (GRANT / REVOKE) on the `demo` schema
+--          and parameterised vs. injectable search functions (TC-11..TC-14).
 -- =====================================================================
 
 begin;
 
--- 1. Standalone demo schema (unexposed to API roles)
-create schema if not exists demo;
-revoke all on schema demo from public, anon, authenticated;
-
--- 2. Standalone SQL roles (granted to current_user so SET LOCAL ROLE works in tests)
+-- 1. Create standalone demo roles if they do not exist (NOLOGIN roles
+--    tested via `SET ROLE demo_...` in SQL sessions).
 do $$
 begin
   if not exists (select 1 from pg_roles where rolname = 'demo_student') then
@@ -26,17 +20,25 @@ begin
   if not exists (select 1 from pg_roles where rolname = 'demo_admin') then
     create role demo_admin nologin;
   end if;
-end $$;
+end
+$$;
 
-grant demo_student, demo_lecturer, demo_admin to postgres;
-grant usage on schema demo to demo_student, demo_lecturer, demo_admin;
+-- 2. Create isolated `demo` schema with RLS disabled so standalone SQL
+--    role privileges (`GRANT` / `REVOKE`) are directly observable.
+create schema if not exists demo;
+revoke all on schema demo from public, anon, authenticated;
+revoke all on all tables in schema demo from public, anon, authenticated;
+revoke all on all functions in schema demo from public, anon, authenticated;
 
--- 3. Demo tables (RLS intentionally disabled; identity PKs need no sequence grants)
+alter default privileges in schema demo revoke all on tables    from public, anon, authenticated, demo_student, demo_lecturer, demo_admin;
+alter default privileges in schema demo revoke all on sequences from public, anon, authenticated, demo_student, demo_lecturer, demo_admin;
+alter default privileges in schema demo revoke all on functions from public, anon, authenticated, demo_student, demo_lecturer, demo_admin;
+
 create table if not exists demo.students (
   id             bigint generated always as identity primary key,
   student_number text not null unique,
   full_name      text not null,
-  national_id    text not null
+  year_of_study  smallint not null check (year_of_study between 1 and 6)
 );
 
 create table if not exists demo.courses (
@@ -48,80 +50,75 @@ create table if not exists demo.courses (
 create table if not exists demo.enrollments (
   id         bigint generated always as identity primary key,
   student_id bigint not null references demo.students (id) on delete cascade,
-  course_id  bigint not null references demo.courses (id) on delete restrict,
+  course_id  bigint not null references demo.courses (id) on delete cascade,
   marks      numeric(5, 2) check (marks between 0 and 100),
+  grade      text check (grade in ('A', 'B', 'C', 'D', 'F')),
   unique (student_id, course_id)
 );
 
--- 4. Classic GRANT / REVOKE privileges (Section 6.2)
-revoke all on demo.students, demo.courses, demo.enrollments from public, anon, authenticated;
-revoke all on demo.students, demo.courses, demo.enrollments from demo_student, demo_lecturer, demo_admin;
+-- Explicitly ensure RLS is disabled on demo tables (Section 6.2).
+alter table demo.students    disable row level security;
+alter table demo.courses     disable row level security;
+alter table demo.enrollments disable row level security;
 
--- demo_student: read courses + non-sensitive student columns only; no marks or writes
+-- 3. Grant schema USAGE and per-role table / column privileges (Section 6.2).
+grant usage on schema demo to demo_student, demo_lecturer, demo_admin;
+
+-- Reset demo role grants first for idempotency
+revoke all on all tables in schema demo from demo_student, demo_lecturer, demo_admin;
+
+-- demo_student: read course catalogue + limited columns on students only
 grant select on demo.courses to demo_student;
 grant select (id, student_number, full_name) on demo.students to demo_student;
 
--- demo_lecturer: read all demo tables + update marks column only
+-- demo_lecturer: read demo tables + update marks column only on enrollments
 grant select on demo.students, demo.courses, demo.enrollments to demo_lecturer;
 grant update (marks) on demo.enrollments to demo_lecturer;
 
--- demo_admin: full DML on demo tables (no DDL / role creation)
+-- demo_admin: full DML on demo tables
 grant select, insert, update, delete on demo.students, demo.courses, demo.enrollments to demo_admin;
 
--- 5. Seed synthetic demo records
-insert into demo.students (student_number, full_name, national_id)
-values
-  ('ZUT2026001', 'Kabwe Zulu',    '111111/10/1'),
-  ('ZUT2026002', 'Natasha Phiri', '222222/10/1'),
-  ('ZUT2026003', 'Thabo Sakala',  '333333/10/1')
-on conflict (student_number) do nothing;
-
-insert into demo.courses (course_code, title)
-values
-  ('BIT3360', 'Advanced Databases'),
-  ('BIT3410', 'Information Systems Security')
-on conflict (course_code) do nothing;
-
-insert into demo.enrollments (student_id, course_id, marks)
-values
-  (1, 1, 82.00),
-  (1, 2, 68.00),
-  (2, 1, 54.00)
-on conflict (student_id, course_id) do nothing;
-
--- 6. SQL Injection Demonstration: Unsafe Concatenation vs. Safe Parameterisation (TC-14)
+-- 4. Injection demonstration functions (TC-14, FR-08).
+--    WARNING: demo.search_students_unsafe() is intentionally vulnerable
+--    for classroom demonstration on synthetic data ONLY.
+drop function if exists demo.search_students_unsafe(text);
 create or replace function demo.search_students_unsafe(p_query text)
-returns table (id bigint, student_number text, full_name text)
+returns setof demo.students
 language plpgsql
-security invoker
-set search_path = ''
+security definer
+set search_path = demo, pg_temp
 as $$
+declare
+  v_sql text;
 begin
-  return query execute
-    'select id, student_number, full_name from demo.students where full_name = ''' || p_query || '''';
+  v_sql := format(
+    'SELECT * FROM demo.students WHERE full_name ILIKE ''%%%s%%'' OR student_number ILIKE ''%%%s%%''',
+    p_query,
+    p_query
+  );
+  return query execute v_sql;
 end;
 $$;
 
+drop function if exists demo.search_students_safe(text);
 create or replace function demo.search_students_safe(p_query text)
-returns table (id bigint, student_number text, full_name text)
+returns setof demo.students
 language plpgsql
-security invoker
-set search_path = ''
+security definer
+set search_path = demo, pg_temp
 as $$
+declare
+  v_pattern text := '%' || coalesce(p_query, '') || '%';
 begin
-  return query execute
-    'select id, student_number, full_name from demo.students where full_name = $1'
-    using p_query;
+  return query
+    execute 'SELECT * FROM demo.students WHERE full_name ILIKE $1 OR student_number ILIKE $1'
+    using v_pattern;
 end;
 $$;
 
 revoke all on function demo.search_students_unsafe(text) from public, anon, authenticated;
 revoke all on function demo.search_students_safe(text)   from public, anon, authenticated;
-grant execute on function demo.search_students_unsafe(text) to demo_student, demo_lecturer, demo_admin;
-grant execute on function demo.search_students_safe(text)   to demo_student, demo_lecturer, demo_admin;
+grant execute on function demo.search_students_unsafe(text) to demo_admin, demo_lecturer, demo_student;
+grant execute on function demo.search_students_safe(text)   to demo_admin, demo_lecturer, demo_student;
 
 commit;
-
--- V9. Quick smoke test for TC-14 (run in SQL Editor)
--- select 'unsafe' as mode, * from demo.search_students_unsafe($q$' OR '1'='1$q$);
--- select 'safe'   as mode, * from demo.search_students_safe($q$' OR '1'='1$q$);
