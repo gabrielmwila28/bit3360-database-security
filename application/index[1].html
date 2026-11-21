@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Secure Student Records – BIT3360</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<style>
+:root{--bg:#f2f5fa;--card:#fff;--ink:#14203a;--muted:#5a6785;--line:#e0e6f1;--zebra:#f7f9fd;
+--brand:#12306e;--accent:#2f6df6;--accent-ink:#fff;--ok:#0f7a3a;--bad:#b42318;--info:#1d4ed8;
+--shadow:0 1px 2px #0f172a14,0 10px 28px #0f172a14}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1322;--card:#161e34;--ink:#e8edf9;--muted:#9aa8c7;--line:#27314f;--zebra:#1a2340;
+--brand:#0a1a3d;--accent:#5b8cff;--accent-ink:#0b1226;--ok:#4cd187;--bad:#ff8a80;--info:#8ab4ff;--shadow:0 10px 28px #0006}}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.banner{background:linear-gradient(135deg,var(--brand),#2447a6);color:#fff;padding:28px 16px 56px}
+.banner div{max-width:1000px;margin:0 auto}
+.banner h1{margin:0;font-size:clamp(20px,4vw,28px);letter-spacing:.2px}
+.banner p{margin:6px 0 0;opacity:.85;font-size:14px}
+main{max-width:1000px;margin:-36px auto 32px;padding:0 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:18px;margin-bottom:16px}
+#login{max-width:420px;margin:0 auto 16px}
+#login h2{margin:0 0 4px;font-size:20px}
+.hint{margin:0 0 14px;color:var(--muted);font-size:14px}
+label{display:block;font-size:13px;font-weight:600;margin:10px 0 4px}
+input{width:100%;padding:10px 12px;font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:10px;outline:none}
+input:focus{border-color:var(--accent);box-shadow:0 0 0 3px #2f6df633}
+button{font:inherit;font-weight:600;cursor:pointer;border:0;border-radius:10px;padding:10px 16px;background:var(--accent);color:var(--accent-ink)}
+button:hover{filter:brightness(1.08)}
+#login button{width:100%;margin-top:16px}
+header.bar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px}
+.who{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pill{background:#2f6df61f;color:var(--accent);border:1px solid #2f6df655;border-radius:99px;padding:2px 12px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.6px}
+.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.tabs{display:inline-flex;gap:4px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:4px;margin-bottom:12px}
+.tabs button{background:transparent;color:var(--muted);padding:8px 16px}
+.tabs button.on{background:var(--accent);color:var(--accent-ink)}
+#msg{display:none;padding:12px 14px;border-radius:10px;margin:0 0 12px;border-left:5px solid;font-weight:500}
+#msg.ok{background:#0f7a3a1c;border-color:var(--ok);color:var(--ok)}
+#msg.bad{background:#b423181c;border-color:var(--bad);color:var(--bad)}
+#msg.info{background:#1d4ed81c;border-color:var(--info);color:var(--info)}
+#search{margin-bottom:8px}
+#count{color:var(--muted);font-size:13px;margin-bottom:8px}
+.wrap{overflow:auto;max-height:60vh;border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;font-size:14px;white-space:nowrap}
+th{position:sticky;top:0;background:var(--brand);color:#fff;text-align:left;padding:10px 12px;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
+td{padding:9px 12px;border-top:1px solid var(--line)}
+tr:nth-child(even) td{background:var(--zebra)}
+td input{width:84px;padding:6px 8px;display:inline-block}
+td button{padding:6px 12px;margin-left:6px;font-size:13px}
+footer{text-align:center;color:var(--muted);font-size:12px;padding:0 16px 24px}
+</style></head><body>
+<div class="banner"><div>
+  <h1>Secure Student Records Management</h1>
+  <p>BIT3360 Advanced Databases · Role-based access with Row Level Security</p>
+</div></div>
+
+<main>
+<form id="login" class="card">
+  <h2>Sign in</h2>
+  <p class="hint">Use your assigned account. What you can see and change depends on your role.</p>
+  <label for="email">Email</label>
+  <input id="email" type="email" list="accts" placeholder="name@bit3360.test" required autocomplete="username">
+  <datalist id="accts">
+    <option value="admin@bit3360.test"><option value="lecturer1@bit3360.test"><option value="lecturer2@bit3360.test">
+    <option value="student.a@bit3360.test"><option value="student.b@bit3360.test"><option value="student.c@bit3360.test">
+  </datalist>
+  <label for="pw">Password</label>
+  <input id="pw" type="password" placeholder="Your password" required autocomplete="current-password">
+  <button type="submit">Log in</button>
+</form>
+
+<div id="app" hidden>
+  <header class="bar">
+    <div class="who">Signed in as <b id="who"></b> <span class="pill" id="role"></span></div>
+    <button id="logout" type="button" class="ghost">Log out</button>
+  </header>
+  <div id="msg" role="status"></div>
+  <div class="tabs">
+    <button id="t-marks" type="button" class="on">Marks</button>
+    <button id="t-audit" type="button">Audit logs</button>
+  </div>
+  <div class="card">
+    <input id="search" type="search" placeholder="Search student, number or course" aria-label="Search">
+    <div id="count"></div>
+    <div class="wrap" id="out"></div>
+  </div>
+</div>
+</main>
+<footer>Row Level Security decides what each role can see and edit.</footer>
+<script src="app.js"></script>
+</body></html>
